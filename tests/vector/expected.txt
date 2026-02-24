@@ -1,0 +1,20 @@
+TAG: empty
+PRINT: empty std::vector (capacity=0)
+TAG: push_back_one
+PRINT: std::vector (length=1, capacity=*) = {10}
+TAG: push_back_three
+PRINT: std::vector (length=3, capacity=*) = {10, 20, 30}
+TAG: after_pop_back
+PRINT: std::vector (length=2, capacity=*) = {10, 20}
+TAG: after_assign
+PRINT: std::vector (length=5, capacity=*) = {100, 200, 300, 400, 500}
+TAG: after_reserve
+PRINT: std::vector (length=5, capacity=100) = {100, 200, 300, 400, 500}
+TAG: after_shrink_to_fit
+PRINT: std::vector (length=5, capacity=5) = {100, 200, 300, 400, 500}
+TAG: cleared
+PRINT: empty std::vector (capacity=0)
+TAG: growing
+PRINT: std::vector (length=2, capacity=*) = {1, 2}
+TAG: after_realloc
+PRINT: std::vector (length=5, capacity=*) = {1, 2, 3, 4, 5}
