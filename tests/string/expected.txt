@@ -1,0 +1,14 @@
+TAG: empty
+PRINT: ""
+TAG: short
+PRINT: "hello"
+TAG: short_append
+PRINT: "hello, world!"
+TAG: long
+PRINT: "this string is long enough to exceed the small buffer optimization limit"
+TAG: long_to_short
+PRINT: "back to short"
+TAG: cleared
+PRINT: ""
+TAG: special_chars
+PRINT: "special chars: \t\n\\\""
