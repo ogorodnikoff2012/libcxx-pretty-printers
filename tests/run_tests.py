@@ -14,12 +14,15 @@ Usage:
     python3 tests/run_tests.py --rebuild                # force rebuild Docker images
 """
 
+from __future__ import annotations
+
 import argparse
 import glob
 import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
@@ -31,9 +34,28 @@ COMPILE_FLAGS = "-stdlib=libc++ -g -O0 -std=c++17 -fno-limit-debug-info"
 DOCKER_TIMEOUT = 120
 
 
+# -- Data types ----------------------------------------------------------------
+
+@dataclass
+class TestCase:
+    name: str
+    cpp: str
+    gdb_script: str
+    expected: str
+    container_cpp: str
+    container_gdb: str
+
+
+@dataclass
+class Mismatch:
+    line: int
+    actual: str
+    expected: str
+
+
 # -- Docker image management ---------------------------------------------------
 
-def image_exists(tag):
+def image_exists(tag: str) -> bool:
     """Check if a Docker image exists locally."""
     result = subprocess.run(
         ["docker", "image", "inspect", tag],
@@ -42,7 +64,7 @@ def image_exists(tag):
     return result.returncode == 0
 
 
-def build_image(llvm_version, quiet=True):
+def build_image(llvm_version: str, quiet: bool = True) -> tuple[bool, str]:
     """Build a Docker image for the given LLVM version."""
     tag = f"{IMAGE_PREFIX}:{llvm_version}"
     cmd = [
@@ -61,9 +83,11 @@ def build_image(llvm_version, quiet=True):
     return True, tag
 
 
-def ensure_images(versions, rebuild=False, verbose=False):
+def ensure_images(
+    versions: list[str], *, rebuild: bool = False, verbose: bool = False,
+) -> list[str]:
     """Ensure Docker images exist for all requested versions. Returns available versions."""
-    available = []
+    available: list[str] = []
     for ver in versions:
         tag = f"{IMAGE_PREFIX}:{ver}"
         if not rebuild and image_exists(tag):
@@ -81,9 +105,9 @@ def ensure_images(versions, rebuild=False, verbose=False):
 
 # -- Test discovery ------------------------------------------------------------
 
-def discover_tests(test_filter=None):
+def discover_tests(test_filter: str | None = None) -> list[TestCase]:
     """Find test cases under tests/. Each is a directory with test_*.cpp."""
-    cases = []
+    cases: list[TestCase] = []
     for cpp in sorted(glob.glob(os.path.join(SCRIPT_DIR, "*/test_*.cpp"))):
         test_dir = os.path.dirname(cpp)
         test_name = os.path.basename(test_dir)
@@ -91,40 +115,37 @@ def discover_tests(test_filter=None):
             continue
         base = os.path.splitext(os.path.basename(cpp))[0]
         gdb_script = os.path.join(test_dir, base + ".gdb")
-        expected = os.path.join(test_dir, "expected.txt")
         if not os.path.exists(gdb_script):
             print(f"  SKIP {test_name}: missing {base}.gdb")
             continue
-        cases.append({
-            "name": test_name,
-            "cpp": cpp,
-            "gdb_script": gdb_script,
-            "expected": expected,
-            "dir": test_dir,
-            # Paths relative to tests/ for use inside the container
-            "container_cpp": f"/workspace/tests/{test_name}/{base}.cpp",
-            "container_gdb": f"/workspace/tests/{test_name}/{base}.gdb",
-        })
+        cases.append(TestCase(
+            name=test_name,
+            cpp=cpp,
+            gdb_script=gdb_script,
+            expected=os.path.join(test_dir, "expected.txt"),
+            container_cpp=f"/workspace/tests/{test_name}/{base}.cpp",
+            container_gdb=f"/workspace/tests/{test_name}/{base}.gdb",
+        ))
     return cases
 
 
 # -- Docker execution ----------------------------------------------------------
 
-def run_docker_test(llvm_version, test, verbose=False):
-    """Run a test inside a Docker container. Returns (ok, result).
+def run_docker_test(
+    llvm_version: str, test: TestCase, *, verbose: bool = False,
+) -> tuple[bool, list[str] | str]:
+    """Run a test inside a Docker container.
 
-    On success result is a list of parsed output lines.
-    On failure result is an error message string.
+    Returns (True, parsed_lines) on success or (False, error_message) on failure.
     """
     tag = f"{IMAGE_PREFIX}:{llvm_version}"
     compiler = f"clang++-{llvm_version}"
 
-    # Build the shell command that runs inside the container
     inner_script = (
         f"cd /tmp && "
-        f"{compiler} {COMPILE_FLAGS} -o test_binary {test['container_cpp']} && "
+        f"{compiler} {COMPILE_FLAGS} -o test_binary {test.container_cpp} && "
         f"PRINTER_PATH=/workspace/src "
-        f"gdb --batch --quiet -nh -x {test['container_gdb']} ./test_binary"
+        f"gdb --batch --quiet -nh -x {test.container_gdb} ./test_binary"
     )
 
     cmd = [
@@ -145,14 +166,13 @@ def run_docker_test(llvm_version, test, verbose=False):
     stdout, stderr = result.stdout, result.stderr
 
     if verbose:
-        print(f"--- docker stdout (clang++-{llvm_version} / {test['name']}) ---")
+        print(f"--- docker stdout (clang++-{llvm_version} / {test.name}) ---")
         print(stdout)
         if stderr:
-            print(f"--- docker stderr ---")
+            print("--- docker stderr ---")
             print(stderr)
         print("--- end ---")
 
-    # Parse tagged output
     actual = parse_output(stdout)
     if not actual:
         return False, (
@@ -166,49 +186,46 @@ def run_docker_test(llvm_version, test, verbose=False):
 
 # -- Output parsing ------------------------------------------------------------
 
-def parse_output(raw):
+def parse_output(raw: str) -> list[str]:
     """Extract @@@ tagged lines from GDB output, strip prefix."""
-    lines = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if line.startswith("@@@ "):
-            lines.append(line[4:])
-    return lines
+    return [
+        line.strip()[4:]
+        for line in raw.splitlines()
+        if line.strip().startswith("@@@ ")
+    ]
 
 
 # -- Comparison ----------------------------------------------------------------
 
-def line_matches(actual, expected):
+def line_matches(actual: str, expected: str) -> bool:
     """Check if actual line matches expected, supporting capacity=* wildcard."""
     pattern = re.escape(expected).replace(r"capacity=\*", r"capacity=\d+")
     return re.fullmatch(pattern, actual) is not None
 
 
-def compare_output(actual_lines, expected_lines):
-    """Compare actual vs expected. Returns list of (lineno, actual, expected)."""
-    errors = []
+def compare_output(actual_lines: list[str], expected_lines: list[str]) -> list[Mismatch]:
+    """Compare actual vs expected. Returns list of mismatches."""
+    errors: list[Mismatch] = []
     max_lines = max(len(actual_lines), len(expected_lines))
     for i in range(max_lines):
         act = actual_lines[i].strip() if i < len(actual_lines) else "<missing>"
         exp = expected_lines[i].strip() if i < len(expected_lines) else "<missing>"
         if not line_matches(act, exp):
-            errors.append((i + 1, act, exp))
+            errors.append(Mismatch(line=i + 1, actual=act, expected=exp))
     return errors
 
 
 # -- CLI helpers ---------------------------------------------------------------
 
-def parse_llvm_version(compiler_arg):
+def parse_llvm_version(compiler_arg: str) -> str:
     """Extract LLVM version number from --compiler arg like 'clang++-18' or '18'."""
     m = re.search(r"(\d+)", compiler_arg)
-    if m:
-        return m.group(1)
-    return compiler_arg
+    return m.group(1) if m else compiler_arg
 
 
 # -- Main ----------------------------------------------------------------------
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Test runner for libc++ GDB pretty-printers (Docker-based)",
     )
@@ -236,47 +253,47 @@ def main():
     if not tests:
         print("ERROR: No test cases found.")
         sys.exit(2)
-    print(f"  Found: {', '.join(t['name'] for t in tests)}")
+    print(f"  Found: {', '.join(t.name for t in tests)}")
 
     passed = 0
     failed = 0
 
     for test in tests:
         for ver in available:
-            label = f"{test['name']} / clang++-{ver}"
-            ok, result = run_docker_test(ver, test, args.verbose)
+            label = f"{test.name} / clang++-{ver}"
+            ok, result = run_docker_test(ver, test, verbose=args.verbose)
 
             if not ok:
                 print(f"  FAIL  {label}: {result}")
                 failed += 1
                 continue
 
-            actual_lines = result
+            actual_lines: list[str] = result  # type: ignore[assignment]
 
             # --update mode: write expected.txt from actual output
             if args.update:
-                with open(test["expected"], "w") as f:
+                with open(test.expected, "w") as f:
                     f.write("\n".join(actual_lines) + "\n")
-                print(f"  UPDATED  {label} -> {test['expected']}")
+                print(f"  UPDATED  {label} -> {test.expected}")
                 passed += 1
                 continue
 
             # Compare with expected
-            if not os.path.exists(test["expected"]):
+            if not os.path.exists(test.expected):
                 print(f"  FAIL  {label}: expected.txt not found (run with --update to create)")
                 failed += 1
                 continue
 
-            with open(test["expected"]) as f:
+            with open(test.expected) as f:
                 expected_lines = [l.strip() for l in f.readlines() if l.strip()]
 
             errors = compare_output(actual_lines, expected_lines)
             if errors:
                 print(f"  FAIL  {label}:")
-                for lineno, act, exp in errors:
-                    print(f"    line {lineno}:")
-                    print(f"      expected: {exp}")
-                    print(f"      actual:   {act}")
+                for err in errors:
+                    print(f"    line {err.line}:")
+                    print(f"      expected: {err.expected}")
+                    print(f"      actual:   {err.actual}")
                 failed += 1
             else:
                 print(f"  PASS  {label}")
