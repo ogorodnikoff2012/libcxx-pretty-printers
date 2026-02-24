@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
+import json
 import os
 import re
 import subprocess
@@ -55,13 +57,29 @@ class Mismatch:
 
 # -- Docker image management ---------------------------------------------------
 
-def image_exists(tag: str) -> bool:
-    """Check if a Docker image exists locally."""
+DOCKERFILE_HASH_LABEL = "dockerfile.hash"
+
+
+def dockerfile_hash() -> str:
+    """Compute sha256 of the Dockerfile."""
+    with open(DOCKERFILE, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def image_needs_rebuild(tag: str) -> bool:
+    """Check if an image is missing or was built from a stale Dockerfile."""
     result = subprocess.run(
         ["docker", "image", "inspect", tag],
-        capture_output=True, timeout=10,
+        capture_output=True, text=True, timeout=10,
     )
-    return result.returncode == 0
+    if result.returncode != 0:
+        return True
+    try:
+        info = json.loads(result.stdout)
+        stored = info[0].get("Config", {}).get("Labels", {}).get(DOCKERFILE_HASH_LABEL)
+        return stored != dockerfile_hash()
+    except (json.JSONDecodeError, IndexError, KeyError):
+        return True
 
 
 def build_image(llvm_version: str, quiet: bool = True) -> tuple[bool, str]:
@@ -70,6 +88,7 @@ def build_image(llvm_version: str, quiet: bool = True) -> tuple[bool, str]:
     cmd = [
         "docker", "build",
         "--build-arg", f"LLVM_VERSION={llvm_version}",
+        "--label", f"{DOCKERFILE_HASH_LABEL}={dockerfile_hash()}",
         "-t", tag,
         "-f", DOCKERFILE,
         SCRIPT_DIR,
@@ -90,11 +109,11 @@ def ensure_images(
     available: list[str] = []
     for ver in versions:
         tag = f"{IMAGE_PREFIX}:{ver}"
-        if not rebuild and image_exists(tag):
+        if not rebuild and not image_needs_rebuild(tag):
             available.append(ver)
             continue
-        action = "Rebuilding" if rebuild else "Building"
-        print(f"  {action} {tag}...")
+        reason = "forced" if rebuild else "Dockerfile changed"
+        print(f"  Building {tag} ({reason})...")
         ok, msg = build_image(ver, quiet=not verbose)
         if ok:
             available.append(ver)
