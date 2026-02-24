@@ -101,6 +101,24 @@ def find_type(orig, name):
         typ = field.type
 
 
+def _has_member(val, name):
+    """Check if val has a member with the given name."""
+    try:
+        val[name]
+        return True
+    except gdb.error:
+        return False
+
+
+def _is_compressed_pair(val):
+    """Check if val is a __compressed_pair type."""
+    try:
+        name = val.type.strip_typedefs().name
+        return name is not None and '__compressed_pair' in name
+    except Exception:
+        return False
+
+
 def pair_to_tuple(val):
     if make_type_re('__compressed_pair').match(val.type.name):
         t1 = val.type.template_argument(0)
@@ -139,14 +157,20 @@ class StringPrinter:
         if type.code == gdb.TYPE_CODE_REF:
             type = type.target()
 
-        ss = pair_to_tuple(self.val['__r_'])[0]['__s']
+        # LLVM 20+ uses __rep_ directly, older versions use __compressed_pair __r_
+        if _has_member(self.val, '__rep_'):
+            rep = self.val['__rep_']
+        else:
+            rep = pair_to_tuple(self.val['__r_'])[0]
+
+        ss = rep['__s']
         if '__short_mask' in self.val.type.fields():
             __short_mask = int(self.val['__short_mask'])
             if (ss['__size_'] & __short_mask) == 0:
                 len = ss['__size_'] >> 1 if __short_mask == 1 else ss['__size_']
                 ptr = ss['__data_']
             else:
-                sl = pair_to_tuple(self.val['__r_'])[0]['__l']
+                sl = rep['__l']
                 len = sl['__size_']
                 ptr = sl['__data_']
         else:
@@ -154,7 +178,7 @@ class StringPrinter:
                 len = ss['__size_']
                 ptr = ss['__data_']
             else:
-                sl = pair_to_tuple(self.val['__r_'])[0]['__l']
+                sl = rep['__l']
                 len = sl['__size_']
                 ptr = sl['__data_']
 
@@ -215,12 +239,18 @@ class UniquePointerPrinter:
         self.typename = typename
         self.val = val
 
+    def _get_ptr(self):
+        # LLVM 20+: __ptr_ is a direct pointer; older: __compressed_pair
+        if _is_compressed_pair(self.val['__ptr_']):
+            return pair_to_tuple(self.val['__ptr_'])[0]
+        return self.val['__ptr_']
+
     def children (self):
-        v = pair_to_tuple(self.val['__ptr_'])[0]
+        v = self._get_ptr()
         return SmartPtrIterator(v)
 
     def to_string(self):
-        v = pair_to_tuple(self.val['__ptr_'])[0]
+        v = self._get_ptr()
         if v == 0:
             return '%s<%s> = %s <nullptr>' % (str(self.typename),
                                               str(v.type.target()), str(v))
@@ -286,10 +316,15 @@ class OptionalPrinter:
         self.typename = typename
         self.val = val
 
+    def children(self):
+        if not self.val['__engaged_']:
+            return []
+        return [('value', self.val['__val_'])]
+
     def to_string(self):
         if not self.val['__engaged_']:
             return 'empty %s ' % (str(self.typename))
-        return '%s : %s' % (str(self.typename), self.val['__val_'].to_string())
+        return str(self.typename)
 
 
 #    def display_hint(self):
@@ -372,7 +407,12 @@ class ForwardListPrinter:
     def __init__(self, typename, val):
         self.val = val
         self.typename = typename
-        self.head = pair_to_tuple(val['__before_begin_'])[0]['__next_']
+        # LLVM 20+: __before_begin_ is a direct node; older: __compressed_pair
+        bb = val['__before_begin_']
+        if _is_compressed_pair(bb):
+            self.head = pair_to_tuple(bb)[0]['__next_']
+        else:
+            self.head = bb['__next_']
 
     def children(self):
         return self._iterator(self.head)
@@ -444,8 +484,12 @@ class VectorPrinter:
     def to_string(self):
         if self.is_bool:
             length = self.val['__size_']
-            capacity = pair_to_tuple(
-                self.val['__cap_alloc_'])[0] * self.val['__bits_per_word']
+            # LLVM 20+: __cap_ direct; older: __compressed_pair __cap_alloc_
+            if _has_member(self.val, '__cap_alloc_'):
+                capacity = pair_to_tuple(
+                    self.val['__cap_alloc_'])[0] * self.val['__bits_per_word']
+            else:
+                capacity = self.val['__cap_'] * self.val['__bits_per_word']
             if length == 0:
                 return 'empty %s<bool> (capacity=%d)' % (self.typename,
                                                          int(capacity))
@@ -455,7 +499,11 @@ class VectorPrinter:
         else:
             start = ptr_to_void_ptr(self.val['__begin_'])
             finish = ptr_to_void_ptr(self.val['__end_'])
-            end = ptr_to_void_ptr(pair_to_tuple(self.val['__end_cap_'])[0])
+            # LLVM 20+: __cap_ direct; older: __compressed_pair __end_cap_
+            if _has_member(self.val, '__end_cap_'):
+                end = ptr_to_void_ptr(pair_to_tuple(self.val['__end_cap_'])[0])
+            else:
+                end = ptr_to_void_ptr(self.val['__cap_'])
             size_of_value_type = self.val.type.template_argument(0).sizeof
             length = (finish - start) / size_of_value_type
             capacity = (end - start) / size_of_value_type
@@ -534,7 +582,12 @@ class DequePrinter:
     def __init__(self, typename, val):
         self.typename = typename
         self.val = val
-        self.size = pair_to_tuple(val['__size_'])[0]
+        # LLVM 20+: __size_ is a direct size_type; older: __compressed_pair
+        sz = val['__size_']
+        if _is_compressed_pair(sz):
+            self.size = pair_to_tuple(sz)[0]
+        else:
+            self.size = sz
 
     def to_string(self):
         if self.size == 0:
@@ -665,7 +718,11 @@ class SetPrinter:
 class RbtreeIterator(Iterator):
     def __init__(self, rbtree):
         self.node = rbtree['__begin_node_']
-        self.size = pair_to_tuple(rbtree['__pair3_'])[0]
+        # LLVM 20+: __size_ direct; older: __compressed_pair __pair3_
+        if _has_member(rbtree, '__pair3_'):
+            self.size = pair_to_tuple(rbtree['__pair3_'])[0]
+        else:
+            self.size = rbtree['__size_']
         self.node_pointer_type = gdb.lookup_type(
             rbtree.type.strip_typedefs().name + '::__node_pointer')
         self.count = 0
@@ -771,8 +828,13 @@ class MapIteratorPrinter:
 
 class HashtableIterator(Iterator):
     def __init__(self, hashtable):
-        self.node = pair_to_tuple(hashtable['__p1_'])[0]['__next_']
-        self.size = pair_to_tuple(hashtable['__p2_'])[0]
+        # LLVM 20+: direct members; older: __compressed_pair __p1_/__p2_
+        if _has_member(hashtable, '__p1_'):
+            self.node = pair_to_tuple(hashtable['__p1_'])[0]['__next_']
+            self.size = pair_to_tuple(hashtable['__p2_'])[0]
+        else:
+            self.node = hashtable['__first_node_']['__next_']
+            self.size = hashtable['__size_']
 
     def __iter__(self):
         return self
@@ -824,7 +886,11 @@ class UnorderedSetPrinter:
         self.typename = typename
         self.val = val
         self.hashtable = val['__table_']
-        self.size = pair_to_tuple(self.hashtable['__p2_'])[0]
+        # LLVM 20+: __size_ direct; older: __compressed_pair __p2_
+        if _has_member(self.hashtable, '__p2_'):
+            self.size = pair_to_tuple(self.hashtable['__p2_'])[0]
+        else:
+            self.size = self.hashtable['__size_']
         self.hashtableiter = HashtableIterator(self.hashtable)
 
     def hashtable(self):
@@ -852,7 +918,11 @@ class UnorderedMapPrinter:
         self.typename = typename
         self.val = val
         self.hashtable = val['__table_']
-        self.size = pair_to_tuple(self.hashtable['__p2_'])[0]
+        # LLVM 20+: __size_ direct; older: __compressed_pair __p2_
+        if _has_member(self.hashtable, '__p2_'):
+            self.size = pair_to_tuple(self.hashtable['__p2_'])[0]
+        else:
+            self.size = self.hashtable['__size_']
         self.hashtableiter = HashtableIterator(self.hashtable)
 
     def hashtable(self):
