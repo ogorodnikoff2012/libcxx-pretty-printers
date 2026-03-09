@@ -1,0 +1,10 @@
+TAG: empty
+PRINT: empty std::forward_list
+TAG: after_push_front
+PRINT: std::forward_list = {[0] = 10, [1] = 20, [2] = 30}
+TAG: after_pop_front
+PRINT: std::forward_list = {[0] = 20, [1] = 30}
+TAG: after_assign
+PRINT: std::forward_list = {[0] = 100, [1] = 200, [2] = 300}
+TAG: cleared
+PRINT: empty std::forward_list

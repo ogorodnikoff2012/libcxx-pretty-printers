@@ -1,0 +1,4 @@
+TAG: int_double
+PRINT: pair = {first = 42, second = 3.1400000000000001}
+TAG: int_int
+PRINT: pair = {first = 1, second = 2}

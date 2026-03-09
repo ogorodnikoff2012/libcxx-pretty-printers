@@ -301,6 +301,8 @@ class TuplePrinter:
         self.val = val
 
     def children(self):
+        if len(self.val.type.fields()) == 0:
+            return []
         return self._iterator(self.val)
 
     def to_string(self):
@@ -547,12 +549,14 @@ class DequePrinter:
 
     class _iterator(Iterator):
         def __init__(self, size, block_size, start, map_begin, map_end):
-            self.block_size = block_size
+            self.block_size = int(block_size)
             self.count = 0
+            start = int(start)
+            size = int(size)
             self.end_p = size + start
-            self.end_mp = map_begin + self.end_p / block_size
+            self.end_mp = map_begin + self.end_p // self.block_size
             self.p = 0
-            self.mp = map_begin + start / block_size
+            self.mp = map_begin + start // self.block_size
             if map_begin == map_end:
                 self.p = 0
                 self.end_p = 0
@@ -603,7 +607,7 @@ class DequePrinter:
         block_size = self.val['__block_size']
         if block_size.is_optimized_out:
             # Warning, this is pretty flaky
-            block_size = 4096 / size_of_value_type if size_of_value_type < 256 else 16
+            block_size = 4096 // size_of_value_type if size_of_value_type < 256 else 16
         return self._iterator(self.size, block_size, self.val['__start_'],
                               block_map['__begin_'], block_map['__end_'])
 
@@ -661,7 +665,11 @@ class BitsetPrinter:
 
         while word_index < words_count:
             bit_index = 0
-            word = words[word_index]
+            # __first_ is a scalar when __n_words == 1, an array otherwise
+            if int(words_count) == 1:
+                word = int(words)
+            else:
+                word = int(words[word_index])
             while word != 0:
                 if (word & 0x1) != 0:
                     result.append(

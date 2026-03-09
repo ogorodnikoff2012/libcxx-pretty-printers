@@ -1,0 +1,6 @@
+TAG: null
+PRINT: std::unique_ptr<int> = 0x0 <nullptr> = {get() = 0x0}
+TAG: valid
+PRINT: std::unique_ptr<int> = 0x* => 42 = {get() = 0x*}
+TAG: after_reset
+PRINT: std::unique_ptr<int> = 0x0 <nullptr> = {get() = 0x0}

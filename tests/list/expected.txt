@@ -1,0 +1,12 @@
+TAG: empty
+PRINT: empty std::list
+TAG: after_push_back
+PRINT: std::list = {[0] = 10, [1] = 20, [2] = 30}
+TAG: after_push_front
+PRINT: std::list = {[0] = 5, [1] = 10, [2] = 20, [3] = 30}
+TAG: after_pop_back
+PRINT: std::list = {[0] = 5, [1] = 10, [2] = 20}
+TAG: after_pop_front
+PRINT: std::list = {[0] = 10, [1] = 20}
+TAG: cleared
+PRINT: empty std::list

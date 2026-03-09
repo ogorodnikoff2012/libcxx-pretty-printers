@@ -1,0 +1,6 @@
+TAG: empty
+PRINT: empty std::optional
+TAG: with_value
+PRINT: std::optional = {value = 42}
+TAG: after_reset
+PRINT: empty std::optional

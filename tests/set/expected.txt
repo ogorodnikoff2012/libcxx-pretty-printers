@@ -1,0 +1,8 @@
+TAG: empty
+PRINT: empty std::set
+TAG: three_elements
+PRINT: std::set (count=3) = {[0] = 10, [1] = 20, [2] = 30}
+TAG: after_erase
+PRINT: std::set (count=2) = {[0] = 10, [1] = 30}
+TAG: cleared
+PRINT: empty std::set

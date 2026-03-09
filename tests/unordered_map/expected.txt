@@ -1,0 +1,6 @@
+TAG: empty
+PRINT: empty std::unordered_map
+TAG: one_element
+PRINT: std::unordered_map (count=1) = {[0] 1 = 10}
+TAG: cleared
+PRINT: empty std::unordered_map

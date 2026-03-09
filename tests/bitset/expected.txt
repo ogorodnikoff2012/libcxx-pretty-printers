@@ -1,0 +1,8 @@
+TAG: all_zero
+PRINT: std::bitset (length=8)
+TAG: some_bits
+PRINT: std::bitset (length=8) = {[0] = 1, [3] = 1, [7] = 1}
+TAG: all_set
+PRINT: std::bitset (length=8) = {[0] = 1, [1] = 1, [2] = 1, [3] = 1, [4] = 1, [5] = 1, [6] = 1, [7] = 1}
+TAG: after_reset
+PRINT: std::bitset (length=8)

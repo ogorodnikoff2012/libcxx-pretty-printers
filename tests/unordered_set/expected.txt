@@ -1,0 +1,6 @@
+TAG: empty
+PRINT: empty std::unordered_set
+TAG: one_element
+PRINT: std::unordered_set (count=1) = {[0] = 42}
+TAG: cleared
+PRINT: empty std::unordered_set

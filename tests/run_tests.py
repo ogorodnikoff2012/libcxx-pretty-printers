@@ -217,8 +217,15 @@ def parse_output(raw: str) -> list[str]:
 # -- Comparison ----------------------------------------------------------------
 
 def line_matches(actual: str, expected: str) -> bool:
-    """Check if actual line matches expected, supporting capacity=* wildcard."""
-    pattern = re.escape(expected).replace(r"capacity=\*", r"capacity=\d+")
+    """Check if actual line matches expected, supporting wildcards.
+
+    Supported wildcards in expected output:
+        capacity=*  matches  capacity=<any integer>
+        0x*         matches  0x<any hex address>
+    """
+    pattern = re.escape(expected)
+    pattern = pattern.replace(r"capacity=\*", r"capacity=\d+")
+    pattern = pattern.replace(r"0x\*", r"0x[0-9a-f]+")
     return re.fullmatch(pattern, actual) is not None
 
 
