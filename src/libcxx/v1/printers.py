@@ -790,8 +790,13 @@ class MapPrinter:
         def __next__(self):
             item = self.rbiter.__next__()
             item = item.dereference()['__value_']
-            result = ('[%d] %s' % (self.count, str(item['__cc']['first'])),
-                      item['__cc']['second'])
+            # LLVM <=19: pair wrapped in __cc_; LLVM 20+: direct pair
+            if _has_member(item, '__cc_'):
+                pair = item['__cc_']
+            else:
+                pair = item
+            result = ('[%d] %s' % (self.count, str(pair['first'])),
+                      pair['second'])
             self.count += 1
             return result
 
@@ -823,7 +828,10 @@ class MapIteratorPrinter:
 
     def to_string(self):
         value = get_node_value_from_iterator(self.val['__i_'])
-        return '[%s] %s' % pair_to_tuple(value['__cc'])
+        # LLVM <=19: pair wrapped in __cc_; LLVM 20+: direct pair
+        if _has_member(value, '__cc_'):
+            value = value['__cc_']
+        return '[%s] %s' % (value['first'], value['second'])
 
 
 class HashtableIterator(Iterator):
@@ -845,14 +853,27 @@ class HashtableIterator(Iterator):
     def __next__(self):
         if self.node == 0:
             raise StopIteration
-        hash_node_type = gdb.lookup_type(self.node.dereference().type.name +
-                                         '::__node_pointer')
+        node_type_name = self.node.dereference().type.name
+        try:
+            hash_node_type = gdb.lookup_type(
+                node_type_name + '::__node_pointer')
+        except (gdb.error, RuntimeError):
+            # LLVM 20+: GDB may report the type through the __first_node
+            # typedef (__first_node is a typedef for __hash_node_base itself).
+            if '::__first_node' in node_type_name:
+                base_name = node_type_name.rsplit('::__first_node', 1)[0]
+                hash_node_type = gdb.lookup_type(
+                    base_name + '::__node_pointer')
+            else:
+                raise
         node = self.node.cast(hash_node_type).dereference()
         self.node = node['__next_']
         value = node['__value_']
         try:
-            # unordered_map's value is a union of __nc and __cc.
-            value = value['__nc']
+            # LLVM <=19: unordered_map wraps the pair in __hash_value_type
+            # which has a __cc_ member containing pair<const K, V>.
+            # LLVM 20+: __value_ is pair<const K, V> directly.
+            value = value['__cc_']
         except gdb.error:
             pass
         return value
@@ -876,7 +897,10 @@ class UnorderedMapIteratorPrinter:
 
     def to_string(self):
         value = get_node_value_from_pointer(self.val['__i_']['__node_'])
-        return '[%s] %s' % pair_to_tuple(value['__cc'])
+        # LLVM <=19: pair wrapped in __cc_; LLVM 20+: direct pair
+        if _has_member(value, '__cc_'):
+            value = value['__cc_']
+        return '[%s] %s' % (value['first'], value['second'])
 
 
 class UnorderedSetPrinter:
